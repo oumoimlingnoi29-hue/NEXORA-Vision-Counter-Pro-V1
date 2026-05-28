@@ -14,7 +14,7 @@ DB_PATH = BASE_DIR / "nexora.db"
 SNAPSHOT_DIR = BASE_DIR / "snapshots"
 SNAPSHOT_DIR.mkdir(exist_ok=True)
 
-MODEL_NAME = "yolov8s.pt"
+MODEL_NAME = "yolov8n.pt"
 model = YOLO(MODEL_NAME)
 
 TARGET_CLASSES = {
