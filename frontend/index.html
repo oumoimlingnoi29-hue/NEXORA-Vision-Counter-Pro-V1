@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8" />
+  <title>NEXORA Vision Counter Pro</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <div class="bg-grid"></div>
+  <main class="shell">
+    <section class="hero">
+      <header class="brand">
+        <div class="brand-orb"></div>
+        <div>
+          <p>NEXORA SYSTEMS</p>
+          <h1>Vision Counter Pro</h1>
+        </div>
+      </header>
+
+      <section class="camera-frame">
+        <video id="video" autoplay muted playsinline webkit-playsinline></video>
+        <canvas id="overlay"></canvas>
+
+        <div id="placeholder" class="placeholder">
+          <div>
+            <div class="scanner"></div>
+            <p>YOLO VISION ENGINE</p>
+            <h2>Ready for detection</h2>
+            <span>ตรวจจับคน รถยนต์ และรถจักรยานยนต์ ทั้งแบบอยู่นิ่งและเคลื่อนไหว</span>
+          </div>
+        </div>
+
+        <div id="loading" class="loading hidden">SYNCING YOLO BACKEND</div>
+        <div class="corner tl"></div><div class="corner tr"></div><div class="corner bl"></div><div class="corner br"></div>
+      </section>
+
+      <section class="toolbar">
+        <button id="startBtn" class="btn primary">Start Vision</button>
+        <button id="stopBtn" class="btn danger" disabled>Stop</button>
+        <button id="resetBtn" class="btn">Reset</button>
+        <button id="fullscreenBtn" class="btn">Fullscreen</button>
+        <button id="exportBtn" class="btn">Export CSV</button>
+      </section>
+    </section>
+
+    <aside class="panel">
+      <section class="status-card">
+        <span>System State</span>
+        <strong id="statusText">Offline</strong>
+        <small id="backendText">Backend not connected</small>
+      </section>
+
+      <section class="api-card">
+        <label>
+          Backend API URL
+          <input id="apiUrl" placeholder="https://your-railway-app.up.railway.app" />
+        </label>
+        <button id="saveApiBtn" class="btn">Save API</button>
+      </section>
+
+      <section class="metrics">
+        <article><span>People</span><strong id="personCount">0</strong><small>Visible <b id="personLive">0</b></small></article>
+        <article><span>Cars</span><strong id="carCount">0</strong><small>Visible <b id="carLive">0</b></small></article>
+        <article><span>Motorcycles</span><strong id="motorcycleCount">0</strong><small>Visible <b id="motorcycleLive">0</b></small></article>
+        <article><span>Large Vehicles</span><strong id="largeVehicleCount">0</strong><small>Visible <b id="largeVehicleLive">0</b></small></article>
+      </section>
+
+      <section class="settings">
+        <label>
+          Confidence
+          <div class="range-row">
+            <input id="confidenceInput" type="range" min="20" max="80" value="35" />
+            <span id="confidenceText">35%</span>
+          </div>
+        </label>
+        <label>
+          Detection Speed
+          <select id="speedInput">
+            <option value="350">Fast</option>
+            <option value="650" selected>Balanced</option>
+            <option value="1000">Battery Saver</option>
+          </select>
+        </label>
+        <label>
+          Count Stability
+          <select id="stableInput">
+            <option value="1">Instant</option>
+            <option value="2" selected>Stable 2 frames</option>
+            <option value="3">Stable 3 frames</option>
+          </select>
+        </label>
+      </section>
+
+      <section class="log-card">
+        <div class="log-head">
+          <div><p>EVENT STREAM</p><h3>Detection Log</h3></div>
+          <button id="clearLogBtn" class="btn small">Clear</button>
+        </div>
+        <div id="logList" class="log-list"></div>
+      </section>
+    </aside>
+  </main>
+
+  <div id="toast" class="toast"></div>
+  <script src="./script.js"></script>
+</body>
+</html>
