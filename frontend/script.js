@@ -19,6 +19,7 @@ const apiUrlInput = document.getElementById("apiUrl");
 const saveApiBtn = document.getElementById("saveApiBtn");
 
 const confidenceInput = document.getElementById("confidenceInput");
+const confidenceText = document.getElementById("confidenceText");
 const speedInput = document.getElementById("speedInput");
 const stableInput = document.getElementById("stableInput");
 
@@ -86,8 +87,15 @@ if (exportBtn) {
 if (clearLogBtn) {
   clearLogBtn.addEventListener("click", () => {
     logs = [];
+
     const logList = document.getElementById("logList");
     if (logList) logList.innerHTML = "";
+  });
+}
+
+if (confidenceInput && confidenceText) {
+  confidenceInput.addEventListener("input", () => {
+    confidenceText.textContent = `${confidenceInput.value}%`;
   });
 }
 
@@ -95,7 +103,9 @@ saveApiBtn.addEventListener("click", () => {
   API_URL = normalizeApiUrl(apiUrlInput.value || DEFAULT_API_URL);
   apiUrlInput.value = API_URL;
   localStorage.setItem("NEXORA_API_URL", API_URL);
+
   showToast("API URL saved");
+
   checkBackend();
 });
 
@@ -134,8 +144,8 @@ async function checkBackend() {
       "Backend connected · " + (data.model || "YOLO");
 
     return true;
-  } catch (e) {
-    console.error(e);
+  } catch (error) {
+    console.error(error);
     backendText.textContent = "Backend not connected";
     return false;
   }
@@ -193,8 +203,8 @@ async function startVision() {
 
     addLog("SYSTEM", "Vision started");
     requestAnimationFrame(loop);
-  } catch (e) {
-    console.error(e);
+  } catch (error) {
+    console.error(error);
 
     loading.classList.add("hidden");
     startBtn.disabled = false;
@@ -202,8 +212,8 @@ async function startVision() {
 
     stopCameraOnly();
 
-    showToast(e.message || "Cannot start camera or backend");
-    addLog("ERROR", e.message || "Cannot start camera or backend");
+    showToast(error.message || "Cannot start camera or backend");
+    addLog("ERROR", error.message || "Cannot start camera or backend");
   }
 }
 
@@ -296,10 +306,11 @@ async function connectWebSocket() {
         }
 
         lastResponseAt = Date.now();
+
         handleDetections(data.detections || []);
-      } catch (e) {
-        console.error(e);
-        addLog("ERROR", e.message);
+      } catch (error) {
+        console.error(error);
+        addLog("ERROR", error.message);
       } finally {
         sending = false;
       }
@@ -324,9 +335,9 @@ function resizeCanvas() {
 function loop(timestamp) {
   if (!running) return;
 
-  const interval = speedInput ? Number(speedInput.value || 650) : 650;
+  const interval = speedInput ? Number(speedInput.value || 1000) : 1000;
 
-  if (sending && Date.now() - lastResponseAt > 3500) {
+  if (sending && Date.now() - lastResponseAt > 7000) {
     sending = false;
     addLog("WARN", "Frame timeout, sending next frame");
   }
@@ -355,33 +366,37 @@ function sendFrame() {
   resizeCanvas();
 
   const offscreen = document.createElement("canvas");
-  const width = 640;
+
+  // ลดขนาดภาพเพื่อให้ Render Free ประมวลผล YOLO ได้ไวขึ้น
+  const width = 320;
   const ratio = video.videoHeight / video.videoWidth || 9 / 16;
 
   offscreen.width = width;
   offscreen.height = Math.round(width * ratio);
 
   const offctx = offscreen.getContext("2d");
-
   offctx.drawImage(video, 0, 0, offscreen.width, offscreen.height);
 
   try {
+    const confidence = Number(confidenceInput?.value || 25) / 100;
+
     ws.send(
       JSON.stringify({
-        image: offscreen.toDataURL("image/jpeg", 0.72),
-        conf: Number(confidenceInput?.value || 30) / 100,
+        image: offscreen.toDataURL("image/jpeg", 0.55),
+        conf: confidence,
+        confidence: confidence,
       })
     );
 
     setTimeout(() => {
-      if (sending && Date.now() - lastResponseAt > 3000) {
+      if (sending && Date.now() - lastResponseAt > 5000) {
         sending = false;
       }
-    }, 3000);
-  } catch (e) {
+    }, 5000);
+  } catch (error) {
     sending = false;
-    console.error(e);
-    addLog("ERROR", e.message);
+    console.error(error);
+    addLog("ERROR", error.message);
   }
 }
 
@@ -395,7 +410,7 @@ function handleDetections(detections) {
     large_vehicle: 0,
   };
 
-  const backendFrameWidth = 640;
+  const backendFrameWidth = 320;
   const backendFrameHeight = Math.round(
     backendFrameWidth *
       ((video.videoHeight || canvas.height) /
@@ -410,7 +425,7 @@ function handleDetections(detections) {
       const label = normalizeLabel(det.label);
       if (!label) return null;
 
-      const confidence = det.confidence || 0;
+      const confidence = det.confidence || det.conf || 0;
       const [x1, y1, x2, y2] = det.box;
 
       return {
@@ -445,7 +460,7 @@ function normalizeLabel(label) {
 
 function updateTracks(detections) {
   const now = Date.now();
-  const stableFrames = stableInput ? Number(stableInput.value || 2) : 2;
+  const stableFrames = stableInput ? Number(stableInput.value || 1) : 1;
 
   detections.forEach((det) => {
     let bestId = null;
@@ -462,7 +477,7 @@ function updateTracks(detections) {
       }
     }
 
-    if (bestId && bestIou > 0.25) {
+    if (bestId && bestIou > 0.2) {
       const track = tracks[bestId];
 
       track.box = det.box;
@@ -483,10 +498,11 @@ function updateTracks(detections) {
         box: det.box,
         lastSeen: now,
         frames: 1,
-        counted: stableFrames <= 1,
+        counted: false,
       };
 
       if (stableFrames <= 1) {
+        tracks[id].counted = true;
         totals[det.label]++;
         addLog("COUNT", `${labelName(det.label)} counted`);
         saveEvent(det, Number(id));
@@ -495,7 +511,7 @@ function updateTracks(detections) {
   });
 
   for (const [id, track] of Object.entries(tracks)) {
-    if (now - track.lastSeen > 6000) {
+    if (now - track.lastSeen > 7000) {
       delete tracks[id];
     }
   }
