@@ -14,7 +14,12 @@ const placeholder = document.getElementById("placeholder");
 const apiUrlInput = document.getElementById("apiUrl");
 const saveApiBtn = document.getElementById("saveApiBtn");
 
-const confidenceInput = document.getElementById("confidence");
+const confidenceInput = document.getElementById("confidenceInput");
+
+const peopleCount = document.getElementById("peopleCount");
+const carsCount = document.getElementById("carsCount");
+const motorcyclesCount = document.getElementById("motorcyclesCount");
+const trucksCount = document.getElementById("trucksCount");
 
 const DEFAULT_API_URL =
   "https://nexora-vision-counter-pro-v1-1.onrender.com";
@@ -40,8 +45,6 @@ let ws = null;
 let running = false;
 let sending = false;
 
-let tracks = {};
-
 function normalizeApiUrl(url) {
   return String(url || "").trim().replace(/\/$/, "");
 }
@@ -57,6 +60,9 @@ function getWsUrl() {
 
   return "wss://" + API_URL + "/ws/detect";
 }
+
+startBtn.addEventListener("click", startVision);
+stopBtn.addEventListener("click", stopVision);
 
 saveApiBtn.addEventListener("click", () => {
   API_URL = normalizeApiUrl(apiUrlInput.value || DEFAULT_API_URL);
@@ -74,19 +80,10 @@ async function checkBackend() {
   try {
     backendText.textContent = "Checking backend...";
 
-    const controller = new AbortController();
-
-    const timeout = setTimeout(() => {
-      controller.abort();
-    }, 20000);
-
     const response = await fetch(`${API_URL}/health`, {
       method: "GET",
       cache: "no-store",
-      signal: controller.signal,
     });
-
-    clearTimeout(timeout);
 
     if (!response.ok) {
       throw new Error("Backend error");
@@ -101,7 +98,7 @@ async function checkBackend() {
   } catch (e) {
     backendText.textContent = "Backend not connected";
 
-    addLog("ERROR", "Backend not connected");
+    console.error(e);
 
     return false;
   }
@@ -111,42 +108,28 @@ async function startVision() {
   loading.classList.remove("hidden");
 
   startBtn.disabled = true;
-  stopBtn.disabled = true;
 
   try {
-    API_URL = normalizeApiUrl(apiUrlInput.value || DEFAULT_API_URL);
-
-    apiUrlInput.value = API_URL;
-
-    localStorage.setItem("NEXORA_API_URL", API_URL);
-
     const backendReady = await checkBackend();
 
     if (!backendReady) {
       throw new Error("Backend not ready");
     }
 
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: {
-            ideal: "environment",
-          },
-          width: {
-            ideal: 1280,
-          },
-          height: {
-            ideal: 720,
-          },
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        facingMode: {
+          ideal: "environment",
         },
-        audio: false,
-      });
-    } catch {
-      stream = await navigator.mediaDevices.getUserMedia({
-        video: true,
-        audio: false,
-      });
-    }
+        width: {
+          ideal: 1280,
+        },
+        height: {
+          ideal: 720,
+        },
+      },
+      audio: false,
+    });
 
     video.srcObject = stream;
 
@@ -160,28 +143,19 @@ async function startVision() {
 
     statusText.textContent = "Live";
 
-    stopBtn.disabled = false;
-
     running = true;
 
-    loading.classList.add("hidden");
+    stopBtn.disabled = false;
 
-    addLog("SYSTEM", "Vision started");
+    loading.classList.add("hidden");
 
     requestAnimationFrame(loop);
   } catch (e) {
     console.error(e);
 
-    loading.classList.add("hidden");
-
-    startBtn.disabled = false;
-    stopBtn.disabled = true;
-
-    stopCameraOnly();
+    stopVision();
 
     showToast("Cannot start camera or backend");
-
-    addLog("ERROR", e.message);
   }
 }
 
@@ -196,27 +170,6 @@ function stopVision() {
 
   ws = null;
 
-  stopCameraOnly();
-
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-  placeholder.classList.remove("hidden");
-
-  loading.classList.add("hidden");
-
-  statusText.textContent = "Offline";
-
-  startBtn.disabled = false;
-  stopBtn.disabled = true;
-
-  sending = false;
-
-  tracks = {};
-
-  addLog("SYSTEM", "Vision stopped");
-}
-
-function stopCameraOnly() {
   if (stream) {
     stream.getTracks().forEach((track) => track.stop());
 
@@ -224,52 +177,32 @@ function stopCameraOnly() {
   }
 
   video.srcObject = null;
+
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  placeholder.classList.remove("hidden");
+
+  statusText.textContent = "Offline";
+
+  startBtn.disabled = false;
+  stopBtn.disabled = true;
+
+  loading.classList.add("hidden");
 }
 
 async function connectWebSocket() {
   const wsUrl = getWsUrl();
 
-  addLog("SYSTEM", "Connecting WebSocket");
-
   return new Promise((resolve, reject) => {
-    let settled = false;
-
     ws = new WebSocket(wsUrl);
 
-    const timeout = setTimeout(() => {
-      if (!settled) {
-        settled = true;
-
-        try {
-          ws.close();
-        } catch {}
-
-        reject(new Error("WebSocket timeout"));
-      }
-    }, 20000);
-
     ws.onopen = () => {
-      if (settled) return;
-
-      settled = true;
-
-      clearTimeout(timeout);
-
       backendText.textContent = "YOLO WebSocket connected";
-
-      addLog("SYSTEM", "WebSocket connected");
-
       resolve();
     };
 
     ws.onerror = () => {
-      if (settled) return;
-
-      settled = true;
-
-      clearTimeout(timeout);
-
-      reject(new Error("Cannot connect WebSocket backend"));
+      reject(new Error("Cannot connect WebSocket"));
     };
 
     ws.onmessage = (event) => {
@@ -278,7 +211,7 @@ async function connectWebSocket() {
 
         handleDetections(data.detections || []);
       } catch (e) {
-        addLog("ERROR", e.message);
+        console.error(e);
       } finally {
         sending = false;
       }
@@ -286,12 +219,6 @@ async function connectWebSocket() {
 
     ws.onclose = () => {
       backendText.textContent = "WebSocket closed";
-
-      sending = false;
-
-      if (running) {
-        addLog("ERROR", "WebSocket closed");
-      }
     };
   });
 }
@@ -346,25 +273,33 @@ function sendFrame() {
     offscreen.height
   );
 
-  try {
-    ws.send(
-      JSON.stringify({
-        image: offscreen.toDataURL("image/jpeg", 0.72),
-        conf: Number(confidenceInput.value) / 100,
-      })
-    );
-  } catch (e) {
-    sending = false;
-
-    addLog("ERROR", e.message);
-  }
+  ws.send(
+    JSON.stringify({
+      image: offscreen.toDataURL("image/jpeg", 0.72),
+      conf: Number(confidenceInput.value || 40) / 100,
+    })
+  );
 }
 
 function handleDetections(detections) {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
+  let people = 0;
+  let cars = 0;
+  let motorcycles = 0;
+  let trucks = 0;
+
   detections.forEach((det) => {
     const [x1, y1, x2, y2] = det.box;
+
+    const label = det.label || "object";
+
+    const confidence = det.confidence || 0;
+
+    if (label === "person") people++;
+    if (label === "car") cars++;
+    if (label === "motorcycle") motorcycles++;
+    if (label === "truck" || label === "bus") trucks++;
 
     ctx.strokeStyle = "#33F6FF";
     ctx.lineWidth = 3;
@@ -381,15 +316,16 @@ function handleDetections(detections) {
     ctx.font = "16px Arial";
 
     ctx.fillText(
-      `${det.class} ${Math.round(det.conf * 100)}%`,
+      `${label} ${Math.round(confidence * 100)}%`,
       x1,
       y1 - 10
     );
   });
-}
 
-function addLog(type, message) {
-  console.log(`[${type}]`, message);
+  peopleCount.textContent = people;
+  carsCount.textContent = cars;
+  motorcyclesCount.textContent = motorcycles;
+  trucksCount.textContent = trucks;
 }
 
 function showToast(message) {
@@ -398,10 +334,6 @@ function showToast(message) {
 
 window.addEventListener("resize", () => {
   setTimeout(resizeCanvas, 200);
-});
-
-window.addEventListener("orientationchange", () => {
-  setTimeout(resizeCanvas, 500);
 });
 
 checkBackend();
