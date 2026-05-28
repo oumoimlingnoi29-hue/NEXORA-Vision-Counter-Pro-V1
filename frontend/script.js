@@ -1,30 +1,407 @@
-const video=document.getElementById("video"),canvas=document.getElementById("overlay"),ctx=canvas.getContext("2d");
-const startBtn=document.getElementById("startBtn"),stopBtn=document.getElementById("stopBtn"),resetBtn=document.getElementById("resetBtn"),fullscreenBtn=document.getElementById("fullscreenBtn"),exportBtn=document.getElementById("exportBtn"),clearLogBtn=document.getElementById("clearLogBtn"),saveApiBtn=document.getElementById("saveApiBtn");
-const apiUrlInput=document.getElementById("apiUrl"),statusText=document.getElementById("statusText"),backendText=document.getElementById("backendText"),placeholder=document.getElementById("placeholder"),loading=document.getElementById("loading");
-const confidenceInput=document.getElementById("confidenceInput"),confidenceText=document.getElementById("confidenceText"),speedInput=document.getElementById("speedInput"),stableInput=document.getElementById("stableInput");
-let API_URL=localStorage.getItem("NEXORA_API_URL")||"http://127.0.0.1:8000";apiUrlInput.value=API_URL;
-let stream=null,ws=null,running=false,sending=false,lastSentAt=0,tracks={},nextTrackId=1,countedTrackIds=new Set(),logs=[];
-let counts={person:0,car:0,motorcycle:0,large_vehicle:0},live={person:0,car:0,motorcycle:0,large_vehicle:0};
-confidenceInput.addEventListener("input",()=>confidenceText.textContent=`${confidenceInput.value}%`);
-saveApiBtn.addEventListener("click",()=>{API_URL=apiUrlInput.value.trim().replace(/\/$/,"");localStorage.setItem("NEXORA_API_URL",API_URL);showToast("API URL saved");checkBackend();});
-startBtn.addEventListener("click",startVision);stopBtn.addEventListener("click",stopVision);resetBtn.addEventListener("click",resetAll);fullscreenBtn.addEventListener("click",()=>document.querySelector(".camera-frame").requestFullscreen?.());exportBtn.addEventListener("click",exportCSV);clearLogBtn.addEventListener("click",()=>{logs=[];document.getElementById("logList").innerHTML="";});
-window.addEventListener("resize",()=>setTimeout(resizeCanvas,200));window.addEventListener("orientationchange",()=>setTimeout(resizeCanvas,500));checkBackend();
-async function checkBackend(){try{const r=await fetch(`${API_URL}/health`);const d=await r.json();backendText.textContent=`Backend connected · ${d.model}`;}catch{backendText.textContent="Backend not connected";}}
-async function startVision(){loading.classList.remove("hidden");startBtn.disabled=true;try{stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:"environment"},width:{ideal:1280},height:{ideal:720}},audio:false});video.srcObject=stream;await video.play();resizeCanvas();placeholder.classList.add("hidden");statusText.textContent="Live";stopBtn.disabled=false;await connectWebSocket();running=true;loading.classList.add("hidden");addLog("SYSTEM","Vision started");requestAnimationFrame(loop);}catch(e){console.error(e);loading.classList.add("hidden");startBtn.disabled=false;stopBtn.disabled=true;showToast("Cannot start camera or backend");addLog("ERROR",e.message);}}
-async function connectWebSocket(){const wsUrl=API_URL.replace(/^http/,"ws")+"/ws/detect";return new Promise((resolve,reject)=>{ws=new WebSocket(wsUrl);ws.onopen=()=>{backendText.textContent="YOLO WebSocket connected";resolve();};ws.onerror=()=>reject(new Error("Cannot connect WebSocket backend"));ws.onmessage=e=>{try{const d=JSON.parse(e.data);if(d.error){addLog("ERROR",d.error);return;}handleDetections(d.detections||[]);}catch(err){addLog("ERROR",err.message);}finally{sending=false;}};ws.onclose=()=>backendText.textContent="WebSocket closed";});}
-function stopVision(){running=false;if(ws){ws.close();ws=null;}if(stream){stream.getTracks().forEach(t=>t.stop());stream=null;}video.srcObject=null;ctx.clearRect(0,0,canvas.width,canvas.height);placeholder.classList.remove("hidden");loading.classList.add("hidden");statusText.textContent="Offline";startBtn.disabled=false;stopBtn.disabled=true;sending=false;tracks={};addLog("SYSTEM","Vision stopped");}
-function resizeCanvas(){const w=video.videoWidth||1280,h=video.videoHeight||720;if(canvas.width!==w||canvas.height!==h){canvas.width=w;canvas.height=h;}}
-function loop(ts){if(!running)return;const interval=Number(speedInput.value);if(!sending&&ws&&ws.readyState===WebSocket.OPEN&&ts-lastSentAt>interval){lastSentAt=ts;sending=true;sendFrame();}requestAnimationFrame(loop);}
-function sendFrame(){resizeCanvas();const off=document.createElement("canvas"),tw=640,ratio=(video.videoHeight/video.videoWidth)||9/16;off.width=tw;off.height=Math.round(tw*ratio);off.getContext("2d").drawImage(video,0,0,off.width,off.height);ws.send(JSON.stringify({image:off.toDataURL("image/jpeg",.72),conf:Number(confidenceInput.value)/100}));}
-function handleDetections(dets){live={person:0,car:0,motorcycle:0,large_vehicle:0};ctx.clearRect(0,0,canvas.width,canvas.height);const scaled=dets.map(d=>{const label=normalizeLabel(d.label);if(!label)return null;const [x1,y1,x2,y2]=d.box;const sx=canvas.width/640,bh=640*(canvas.height/canvas.width),sy=canvas.height/bh;return{label,confidence:d.confidence,box:[x1*sx,y1*sy,x2*sx,y2*sy]};}).filter(Boolean);scaled.forEach(d=>{live[d.label]++;drawBox(d);});updateTracks(scaled);updateDisplay();}
-function normalizeLabel(l){if(l==="person")return"person";if(l==="car")return"car";if(l==="motorcycle")return"motorcycle";if(l==="bus"||l==="truck")return"large_vehicle";return null;}
-function drawBox(d){const [x1,y1,x2,y2]=d.box,w=x2-x1,h=y2-y1,color={person:"#34e8ff",car:"#3cffb0",motorcycle:"#ffd166",large_vehicle:"#8b5cf6"}[d.label];ctx.strokeStyle=color;ctx.lineWidth=3;ctx.strokeRect(x1,y1,w,h);const text=`${labelName(d.label)} ${Math.round(d.confidence*100)}%`;ctx.font="16px Arial";const tw=ctx.measureText(text).width+14;ctx.fillStyle="rgba(3,7,18,.84)";ctx.fillRect(x1,Math.max(0,y1-28),tw,26);ctx.fillStyle=color;ctx.fillText(text,x1+7,Math.max(18,y1-10));}
-function updateTracks(dets){const now=Date.now(),stable=Number(stableInput.value);dets.forEach(det=>{let best=null,bestIou=0;for(const [id,tr] of Object.entries(tracks)){if(tr.label!==det.label)continue;const iou=calcIoU(tr.box,det.box);if(iou>bestIou){bestIou=iou;best=id;}}if(best&&bestIou>.25){const tr=tracks[best];tr.box=det.box;tr.confidence=det.confidence;tr.lastSeen=now;tr.frames++;if(tr.frames>=stable&&!countedTrackIds.has(best)){countedTrackIds.add(best);counts[det.label]++;addLog(det.label.toUpperCase(),`${labelName(det.label)} counted: ${counts[det.label]}`);saveEvent(det,Number(best));}}else{const id=String(nextTrackId++);tracks[id]={label:det.label,box:det.box,confidence:det.confidence,lastSeen:now,frames:1};if(stable<=1){countedTrackIds.add(id);counts[det.label]++;addLog(det.label.toUpperCase(),`${labelName(det.label)} counted: ${counts[det.label]}`);saveEvent(det,Number(id));}}});for(const [id,tr] of Object.entries(tracks)){if(now-tr.lastSeen>5000){delete tracks[id];countedTrackIds.delete(id);}}}
-async function saveEvent(det,trackId){try{await fetch(`${API_URL}/events`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({camera_id:"browser-camera",object_type:det.label,track_id:trackId,confidence:det.confidence,action:"detected"})});}catch{}}
-function calcIoU(a,b){const [ax1,ay1,ax2,ay2]=a,[bx1,by1,bx2,by2]=b,x1=Math.max(ax1,bx1),y1=Math.max(ay1,by1),x2=Math.min(ax2,bx2),y2=Math.min(ay2,by2),inter=Math.max(0,x2-x1)*Math.max(0,y2-y1),areaA=Math.max(0,ax2-ax1)*Math.max(0,ay2-ay1),areaB=Math.max(0,bx2-bx1)*Math.max(0,by2-by1),u=areaA+areaB-inter;return u<=0?0:inter/u;}
-function updateDisplay(){document.getElementById("personCount").textContent=counts.person;document.getElementById("carCount").textContent=counts.car;document.getElementById("motorcycleCount").textContent=counts.motorcycle;document.getElementById("largeVehicleCount").textContent=counts.large_vehicle;document.getElementById("personLive").textContent=live.person;document.getElementById("carLive").textContent=live.car;document.getElementById("motorcycleLive").textContent=live.motorcycle;document.getElementById("largeVehicleLive").textContent=live.large_vehicle;}
-function labelName(l){return{person:"Person",car:"Car",motorcycle:"Motorcycle",large_vehicle:"Large vehicle"}[l]||l;}
-function resetAll(){counts={person:0,car:0,motorcycle:0,large_vehicle:0};live={person:0,car:0,motorcycle:0,large_vehicle:0};tracks={};countedTrackIds=new Set();updateDisplay();addLog("SYSTEM","Counters reset");}
-function addLog(type,msg){const time=new Date().toLocaleTimeString("th-TH",{hour12:false});logs.push({time,type,message:msg});const div=document.createElement("div");div.className="log-item";div.innerHTML=`<span class="log-time">${time}</span><span class="log-type">${type}</span><span>${msg}</span>`;document.getElementById("logList").prepend(div);}
-function exportCSV(){const rows=[["time","type","message"],...logs.map(l=>[l.time,l.type,l.message]),[],["summary"],["person",counts.person],["car",counts.car],["motorcycle",counts.motorcycle],["large_vehicle",counts.large_vehicle]];const csv="\uFEFF"+rows.map(r=>r.map(c=>`"${String(c??"").replaceAll('"','""')}"`).join(",")).join("\n");const blob=new Blob([csv],{type:"text/csv;charset=utf-8"}),url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download=`nexora-pro-${new Date().toISOString().slice(0,10)}.csv`;a.click();URL.revokeObjectURL(url);}
-function showToast(msg){const t=document.getElementById("toast");t.textContent=msg;t.classList.add("show");setTimeout(()=>t.classList.remove("show"),3000);}
+const video = document.getElementById("video");
+const canvas = document.getElementById("overlay");
+const ctx = canvas.getContext("2d");
+
+const startBtn = document.getElementById("startBtn");
+const stopBtn = document.getElementById("stopBtn");
+
+const statusText = document.getElementById("statusText");
+const backendText = document.getElementById("backendText");
+
+const loading = document.getElementById("loading");
+const placeholder = document.getElementById("placeholder");
+
+const apiUrlInput = document.getElementById("apiUrl");
+const saveApiBtn = document.getElementById("saveApiBtn");
+
+const confidenceInput = document.getElementById("confidence");
+
+const DEFAULT_API_URL =
+  "https://nexora-vision-counter-pro-v1-1.onrender.com";
+
+let savedApiUrl = localStorage.getItem("NEXORA_API_URL");
+
+if (
+  !savedApiUrl ||
+  savedApiUrl.includes("127.0.0.1") ||
+  savedApiUrl.includes("localhost") ||
+  savedApiUrl.includes("railway.app")
+) {
+  savedApiUrl = DEFAULT_API_URL;
+  localStorage.setItem("NEXORA_API_URL", savedApiUrl);
+}
+
+let API_URL = normalizeApiUrl(savedApiUrl);
+
+apiUrlInput.value = API_URL;
+
+let stream = null;
+let ws = null;
+let running = false;
+let sending = false;
+
+let tracks = {};
+
+function normalizeApiUrl(url) {
+  return String(url || "").trim().replace(/\/$/, "");
+}
+
+function getWsUrl() {
+  if (API_URL.startsWith("https://")) {
+    return API_URL.replace("https://", "wss://") + "/ws/detect";
+  }
+
+  if (API_URL.startsWith("http://")) {
+    return API_URL.replace("http://", "ws://") + "/ws/detect";
+  }
+
+  return "wss://" + API_URL + "/ws/detect";
+}
+
+saveApiBtn.addEventListener("click", () => {
+  API_URL = normalizeApiUrl(apiUrlInput.value || DEFAULT_API_URL);
+
+  apiUrlInput.value = API_URL;
+
+  localStorage.setItem("NEXORA_API_URL", API_URL);
+
+  showToast("API URL saved");
+
+  checkBackend();
+});
+
+async function checkBackend() {
+  try {
+    backendText.textContent = "Checking backend...";
+
+    const controller = new AbortController();
+
+    const timeout = setTimeout(() => {
+      controller.abort();
+    }, 20000);
+
+    const response = await fetch(`${API_URL}/health`, {
+      method: "GET",
+      cache: "no-store",
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeout);
+
+    if (!response.ok) {
+      throw new Error("Backend error");
+    }
+
+    const data = await response.json();
+
+    backendText.textContent =
+      "Backend connected · " + (data.model || "YOLO");
+
+    return true;
+  } catch (e) {
+    backendText.textContent = "Backend not connected";
+
+    addLog("ERROR", "Backend not connected");
+
+    return false;
+  }
+}
+
+async function startVision() {
+  loading.classList.remove("hidden");
+
+  startBtn.disabled = true;
+  stopBtn.disabled = true;
+
+  try {
+    API_URL = normalizeApiUrl(apiUrlInput.value || DEFAULT_API_URL);
+
+    apiUrlInput.value = API_URL;
+
+    localStorage.setItem("NEXORA_API_URL", API_URL);
+
+    const backendReady = await checkBackend();
+
+    if (!backendReady) {
+      throw new Error("Backend not ready");
+    }
+
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: {
+            ideal: "environment",
+          },
+          width: {
+            ideal: 1280,
+          },
+          height: {
+            ideal: 720,
+          },
+        },
+        audio: false,
+      });
+    } catch {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: true,
+        audio: false,
+      });
+    }
+
+    video.srcObject = stream;
+
+    await video.play();
+
+    resizeCanvas();
+
+    await connectWebSocket();
+
+    placeholder.classList.add("hidden");
+
+    statusText.textContent = "Live";
+
+    stopBtn.disabled = false;
+
+    running = true;
+
+    loading.classList.add("hidden");
+
+    addLog("SYSTEM", "Vision started");
+
+    requestAnimationFrame(loop);
+  } catch (e) {
+    console.error(e);
+
+    loading.classList.add("hidden");
+
+    startBtn.disabled = false;
+    stopBtn.disabled = true;
+
+    stopCameraOnly();
+
+    showToast("Cannot start camera or backend");
+
+    addLog("ERROR", e.message);
+  }
+}
+
+function stopVision() {
+  running = false;
+
+  if (ws) {
+    try {
+      ws.close();
+    } catch {}
+  }
+
+  ws = null;
+
+  stopCameraOnly();
+
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  placeholder.classList.remove("hidden");
+
+  loading.classList.add("hidden");
+
+  statusText.textContent = "Offline";
+
+  startBtn.disabled = false;
+  stopBtn.disabled = true;
+
+  sending = false;
+
+  tracks = {};
+
+  addLog("SYSTEM", "Vision stopped");
+}
+
+function stopCameraOnly() {
+  if (stream) {
+    stream.getTracks().forEach((track) => track.stop());
+
+    stream = null;
+  }
+
+  video.srcObject = null;
+}
+
+async function connectWebSocket() {
+  const wsUrl = getWsUrl();
+
+  addLog("SYSTEM", "Connecting WebSocket");
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+
+    ws = new WebSocket(wsUrl);
+
+    const timeout = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+
+        try {
+          ws.close();
+        } catch {}
+
+        reject(new Error("WebSocket timeout"));
+      }
+    }, 20000);
+
+    ws.onopen = () => {
+      if (settled) return;
+
+      settled = true;
+
+      clearTimeout(timeout);
+
+      backendText.textContent = "YOLO WebSocket connected";
+
+      addLog("SYSTEM", "WebSocket connected");
+
+      resolve();
+    };
+
+    ws.onerror = () => {
+      if (settled) return;
+
+      settled = true;
+
+      clearTimeout(timeout);
+
+      reject(new Error("Cannot connect WebSocket backend"));
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+
+        handleDetections(data.detections || []);
+      } catch (e) {
+        addLog("ERROR", e.message);
+      } finally {
+        sending = false;
+      }
+    };
+
+    ws.onclose = () => {
+      backendText.textContent = "WebSocket closed";
+
+      sending = false;
+
+      if (running) {
+        addLog("ERROR", "WebSocket closed");
+      }
+    };
+  });
+}
+
+function resizeCanvas() {
+  canvas.width = video.videoWidth || video.clientWidth;
+  canvas.height = video.videoHeight || video.clientHeight;
+}
+
+function loop() {
+  if (!running) return;
+
+  if (
+    ws &&
+    ws.readyState === WebSocket.OPEN &&
+    !sending &&
+    video.readyState >= 2
+  ) {
+    sending = true;
+
+    sendFrame();
+  }
+
+  requestAnimationFrame(loop);
+}
+
+function sendFrame() {
+  if (!video.videoWidth || !video.videoHeight) {
+    sending = false;
+    return;
+  }
+
+  resizeCanvas();
+
+  const offscreen = document.createElement("canvas");
+
+  const width = 640;
+
+  const ratio =
+    (video.videoHeight / video.videoWidth) || 9 / 16;
+
+  offscreen.width = width;
+  offscreen.height = Math.round(width * ratio);
+
+  const offctx = offscreen.getContext("2d");
+
+  offctx.drawImage(
+    video,
+    0,
+    0,
+    offscreen.width,
+    offscreen.height
+  );
+
+  try {
+    ws.send(
+      JSON.stringify({
+        image: offscreen.toDataURL("image/jpeg", 0.72),
+        conf: Number(confidenceInput.value) / 100,
+      })
+    );
+  } catch (e) {
+    sending = false;
+
+    addLog("ERROR", e.message);
+  }
+}
+
+function handleDetections(detections) {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  detections.forEach((det) => {
+    const [x1, y1, x2, y2] = det.box;
+
+    ctx.strokeStyle = "#33F6FF";
+    ctx.lineWidth = 3;
+
+    ctx.strokeRect(
+      x1,
+      y1,
+      x2 - x1,
+      y2 - y1
+    );
+
+    ctx.fillStyle = "#33F6FF";
+
+    ctx.font = "16px Arial";
+
+    ctx.fillText(
+      `${det.class} ${Math.round(det.conf * 100)}%`,
+      x1,
+      y1 - 10
+    );
+  });
+}
+
+function addLog(type, message) {
+  console.log(`[${type}]`, message);
+}
+
+function showToast(message) {
+  alert(message);
+}
+
+window.addEventListener("resize", () => {
+  setTimeout(resizeCanvas, 200);
+});
+
+window.addEventListener("orientationchange", () => {
+  setTimeout(resizeCanvas, 500);
+});
+
+checkBackend();
